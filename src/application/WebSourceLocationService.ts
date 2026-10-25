@@ -214,6 +214,49 @@ const admitContext = (
   return ok(null);
 };
 
+const generatedPositionIssue = (
+  text: string,
+  position: { readonly line: number; readonly column: number },
+): AnalysisInputIssue | undefined => {
+  let line = 1;
+  let lastLine = 1;
+  let start = 0;
+  let targetLineLength: number | undefined;
+  for (const boundary of text.matchAll(/\r\n?|\n|\u2028|\u2029/gu)) {
+    if (line === position.line) targetLineLength = boundary.index - start;
+    line += 1;
+    start = boundary.index + boundary[0].length;
+    lastLine = line;
+  }
+  if (line === position.line) targetLineLength = text.length - start;
+
+  if (
+    !Number.isSafeInteger(position.line) ||
+    position.line < 1 ||
+    position.line > lastLine
+  )
+    return {
+      path: ["generated_position", "line"],
+      reason: "out_of_range",
+      minimum: 1,
+      maximum: lastLine,
+      message: `Selected generated line is outside the retained script text (${String(lastLine)} lines).`,
+    };
+  if (
+    !Number.isSafeInteger(position.column) ||
+    position.column < 0 ||
+    position.column > (targetLineLength ?? 0)
+  )
+    return {
+      path: ["generated_position", "column"],
+      reason: "out_of_range",
+      minimum: 0,
+      maximum: targetLineLength ?? 0,
+      message: `Selected generated column is outside line ${String(position.line)} (${String(targetLineLength ?? 0)} UTF-16 units).`,
+    };
+  return undefined;
+};
+
 const verifyPairing = (
   input: WebSourceLocationInput,
   data: z.output<typeof artifactsSchema>,
@@ -233,11 +276,18 @@ const verifyPairing = (
     data.source,
     input.generated_position,
   );
-  if (generatedOffset === undefined)
+  if (generatedOffset === undefined) {
+    const rangeIssue = generatedPositionIssue(
+      data.source,
+      input.generated_position,
+    );
+    if (rangeIssue !== undefined)
+      return err(new AnalysisInputError(OPERATION, undefined, [rangeIssue]));
     return invalid(
       ["generated_position"],
       "Selected generated position is outside the retained script text (one-based lines; zero-based UTF-16 columns).",
     );
+  }
   return ok(generatedOffset);
 };
 
